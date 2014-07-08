@@ -27,7 +27,6 @@
 #include <stdio.h>
 #include <math.h>
 #include "nanosvg.h"
-#include "nanosvgrast.h"
 
 NSVGrasterizer* nsvgCreateRasterizer()
 {
