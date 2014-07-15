@@ -1,14 +1,14 @@
 /*
  * Copyright (c) 2013-14 Mikko Mononen memon@inside.org
- *
+ * 
  * This software is provided 'as-is', without any express or implied
  * warranty.  In no event will the authors be held liable for any damages
  * arising from the use of this software.
- *
+ * 
  * Permission is granted to anyone to use this software for any purpose,
  * including commercial applications, and to alter it and redistribute it
  * freely, subject to the following restrictions:
- *
+ * 
  * 1. The origin of this software must not be misrepresented; you must not
  * claim that you wrote the original software. If you use this software
  * in a product, an acknowledgment in the product documentation would be
@@ -22,11 +22,107 @@
  *
  */
 
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
+#ifndef NANOSVGRAST_H
+#define NANOSVGRAST_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct NSVGrasterizer NSVGrasterizer;
+
+/* Example Usage:
+	// Load SVG
+	struct SNVGImage* image = nsvgParseFromFile("test.svg.");
+
+	// Create rasterizer (can be used to render multiple images).
+	struct NSVGrasterizer* rast = nsvgCreateRasterizer();
+	// Allocate memory for image
+	unsigned char* img = malloc(w*h*4);
+	// Rasterize
+	nsvgRasterize(rast, image, 0,0,1, img, w, h, w*4);
+*/
+
+// Allocated rasterizer context.
+NSVGrasterizer* nsvgCreateRasterizer();
+
+// Rasterizes SVG image, returns RGBA image (non-premultiplied alpha)
+//   r - pointer to rasterizer context
+//   image - pointer to image to rasterize
+//   tx,ty - image offset (applied after scaling)
+//   scale - image scale
+//   dst - pointer to destination image data, 4 bytes per pixel (RGBA)
+//   w - width of the image to render
+//   h - height of the image to render
+//   stride - number of bytes per scaleline in the destination buffer
+void nsvgRasterize(NSVGrasterizer* r,
+				   NSVGimage* image, float tx, float ty, float scale,
+				   unsigned char* dst, int w, int h, int stride);
+
+// Deletes rasterizer context.
+void nsvgDeleteRasterizer(NSVGrasterizer*);
+
+
+#ifdef __cplusplus
+};
+#endif
+
+#endif // NANOSVGRAST_H
+
+#ifdef NANOSVGRAST_IMPLEMENTATION
+
 #include <math.h>
-#include "nanosvg.h"
+
+#define NSVG__SUBSAMPLES	5
+#define NSVG__FIXSHIFT		10
+#define NSVG__FIX			(1 << NSVG__FIXSHIFT)
+#define NSVG__FIXMASK		(NSVG__FIX-1)
+#define NSVG__MEMPAGE_SIZE	1024
+
+typedef struct NSVGedge {
+   float x0,y0, x1,y1;
+   int dir;
+   struct NSVGedge* next;
+} NSVGedge;
+
+typedef struct NSVGactiveEdge {
+	int x,dx;
+	float ey;
+	int dir;
+	struct NSVGactiveEdge *next;
+} NSVGactiveEdge;
+
+typedef struct NSVGmemPage {
+	unsigned char mem[NSVG__MEMPAGE_SIZE];
+	int size;
+	struct NSVGmemPage* next;
+} NSVGmemPage;
+
+typedef struct NSVGcachedPaint {
+	char type;
+	char spread;
+	float xform[6];
+	unsigned int colors[256];
+} NSVGcachedPaint;
+
+struct NSVGrasterizer
+{
+	float px, py;
+
+	struct NSVGedge* edges;
+	int nedges;
+	int cedges;
+
+	NSVGactiveEdge* freelist;
+	NSVGmemPage* pages;
+	NSVGmemPage* curpage;
+
+	unsigned char* scanline;
+	int cscanline;
+
+	unsigned char* bitmap;
+	int width, height, stride;
+};
 
 NSVGrasterizer* nsvgCreateRasterizer()
 {
@@ -68,12 +164,12 @@ static NSVGmemPage* nsvg__nextPage(NSVGrasterizer* r, NSVGmemPage* cur)
 	if (cur != NULL && cur->next != NULL) {
 		return cur->next;
 	}
-
+	
 	// Alloc new page
 	newp = (NSVGmemPage*)malloc(sizeof(NSVGmemPage));
 	if (newp == NULL) return NULL;
 	memset(newp, 0, sizeof(NSVGmemPage));
-
+	
 	// Add to linked list
 	if (cur != NULL)
 		cur->next = newp;
@@ -139,13 +235,13 @@ static void nsvg__addEdge(NSVGrasterizer* r, float x0, float y0, float x1, float
 
 static float nsvg__absf(float x) { return x < 0 ? -x : x; }
 
-static void nsvg__flattenCubicBez(NSVGrasterizer* r,
+static void nsvg__flattenCubicBez(NSVGrasterizer* r, 
 								  float x1, float y1, float x2, float y2,
 								  float x3, float y3, float x4, float y4,
 								  float tol, int level)
 {
 	float x12,y12,x23,y23,x34,y34,x123,y123,x234,y234,x1234,y1234;
-
+	
 	if (level > 10) return;
 
 	if (nsvg__absf(x1+x3-x2-x2) + nsvg__absf(y1+y3-y2-y2) + nsvg__absf(x2+x4-x3-x3) + nsvg__absf(y2+y4-y3-y3) < tol) {
@@ -168,8 +264,8 @@ static void nsvg__flattenCubicBez(NSVGrasterizer* r,
 	x1234 = (x123+x234)*0.5f;
 	y1234 = (y123+y234)*0.5f;
 
-	nsvg__flattenCubicBez(r, x1,y1, x12,y12, x123,y123, x1234,y1234, tol, level+1);
-	nsvg__flattenCubicBez(r, x1234,y1234, x234,y234, x34,y34, x4,y4, tol, level+1);
+	nsvg__flattenCubicBez(r, x1,y1, x12,y12, x123,y123, x1234,y1234, tol, level+1); 
+	nsvg__flattenCubicBez(r, x1234,y1234, x234,y234, x34,y34, x4,y4, tol, level+1); 
 }
 
 static void nsvg__flattenShape(NSVGrasterizer* r, NSVGshape* shape, float scale)
@@ -654,7 +750,7 @@ void nsvgRasterize(NSVGrasterizer* r,
 	NSVGedge *e = NULL;
 	NSVGcachedPaint cache;
 	int i;
-
+	
 	r->bitmap = dst;
 	r->width = w;
 	r->height = h;
@@ -669,8 +765,6 @@ void nsvgRasterize(NSVGrasterizer* r,
 	for (i = 0; i < h; i++)
 		memset(&dst[i*stride], 0, w*4);
 
-    fprintf(stderr, "Finished memset\n");
-
 	for (shape = image->shapes; shape != NULL; shape = shape->next) {
 
 		if (shape->fill.type == NSVG_PAINT_NONE)
@@ -683,12 +777,6 @@ void nsvgRasterize(NSVGrasterizer* r,
 		nsvg__flattenShape(r, shape, scale);
 
 		// Scale and translate edges
-
-		int xmin = (2^31)-1;
-		int xmax = 0;
-		int ymin = (2^31)-1;
-		int ymax = 0;
-
 		for (i = 0; i < r->nedges; i++) {
 			e = &r->edges[i];
 			e->x0 = tx + e->x0 * scale;
@@ -702,31 +790,16 @@ void nsvgRasterize(NSVGrasterizer* r,
 
 		// now, traverse the scanlines and find the intersections on each scanline, use non-zero rule
 		nsvg__initPaint(&cache, &shape->fill, shape->opacity);
-
-
+	
 		nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache);
-/*
-		for (i = 0; i < r->nedges; i++) {
-			xmax = (e->x0 > xmax) ? e->x0 : xmax;
-			xmax = (e->x1 > xmax) ? e->x1 : xmax;
-			xmin = (e->x0 < xmin) ? e->x0 : xmin;
-			xmin = (e->x1 < xmin) ? e->x1 : xmin;
-			ymax = (e->y0 > ymax) ? e->y0 : ymax;
-			ymax = (e->y1 > ymax) ? e->y1 : ymax;
-			ymin = (e->y0 < ymin) ? e->y0 : ymin;
-			ymin = (e->y1 < ymin) ? e->y1 : ymin;
-		}
-
-        fprintf(stderr, "Rasterizing shape %d,%d - %d,%d\n", xmin, xmax, ymin, ymax);
-*/
 	}
 
-    fprintf(stderr, "Almost done...\n");
 	nsvg__unpremultiplyAlpha(dst, w, h, stride);
 
 	r->bitmap = NULL;
 	r->width = 0;
 	r->height = 0;
 	r->stride = 0;
-	fprintf(stderr, "Returning from rasterize\n");
 }
+
+#endif

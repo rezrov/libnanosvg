@@ -12,11 +12,11 @@ set (libnanosvg_VERSION_MINOR 1)
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 
-add_library(nanosvg SHARED nanosvg.c nanosvgrast.c)
+add_library(nanosvg SHARED nanosvg.c)
 # add_executable(libnanosvg nanosvg.c nanosvgrast.c)
 
 install(TARGETS nanosvg DESTINATION lib)
-install(FILES nanosvg.h DESTINATION include)
+install(FILES nanosvg.h nanosvgrast.h DESTINATION include)
 
 # uninstall target
 configure_file(
